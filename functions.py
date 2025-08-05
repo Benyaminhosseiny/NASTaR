@@ -177,3 +177,169 @@ def new_geotif(tif_file_path, transform, crs, out_file_path):
         dst.write(im, 1)
 
     print(f"\nSaved corrected image to {out_file_path}")
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def get_geotif_LatLon_extent(tif_file_path):
+    import rasterio as rio
+    with rio.open(tif_file_path) as src:
+        bounds = src.bounds
+        lat_min, lon_min = bounds.bottom, bounds.left
+        lat_max, lon_max = bounds.top, bounds.right
+
+        # # [Approach 2: Using external Transform file]: Find Latitude and Longitude extent of the image using the new transform
+        # src = rio.open(f'{tif_files[tii][:-12]}image_HH_corrected.tif')
+        # transform = src.transform
+        # lon0, lat0 = transform * (0, 0) 
+        # lon1, lat1 = transform * (0, src.shape[0]-1) 
+        # lon2, lat2 = transform * (src.shape[1]-1, 0) 
+        # lon3, lat3 = transform * (src.shape[1]-1, src.shape[0]-1) 
+        # lon_extent, lat_extent = [lon0,lon1,lon2,lon3], [lat0,lat1,lat2,lat3]
+        # lat_max = max(lat_extent)
+        # lat_min = min(lat_extent)
+        # lon_max = max(lon_extent)
+        # lon_min = min(lon_extent)
+    return lat_min, lon_min, lat_max, lon_max
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def load_AIS_df(ais_csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer=[1]):
+    """
+    Load AIS data from a CSV file and filter it based on acquisition date and spatial extent.
+    
+    Parameters:
+    - ais_csv_dir: Path to the AIS CSV file.
+    - acqdate: Acquisition date in 'DD/MM/YYYY HH:MM:SS' format.
+    - lat_min, lon_min, lat_max, lon_max: Spatial extent for filtering.
+    - time_buffer: List of time buffer values in seconds.
+    
+    Returns:
+    - DataFrame containing filtered AIS data.
+    """
+    import pandas as pd
+    from datetime import datetime, timedelta
+    
+    lat_col       = 'Latitude'
+    lon_col       = 'Longitude'
+    timestamp_col = '# Timestamp'
+    
+    chunks = []
+    for t_bii in time_buffer:
+        start_time = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') - timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
+        end_time   = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') + timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
+
+        for chunk in pd.read_csv(ais_csv_dir, chunksize=500000):
+            mask = (chunk[timestamp_col] >= start_time) & (chunk[timestamp_col] <= end_time) & \
+                   (chunk[lat_col] >= lat_min) & (chunk[lat_col] <= lat_max) & \
+                   (chunk[lon_col] >= lon_min) & (chunk[lon_col] <= lon_max)
+            filtered = chunk[mask]
+            if not filtered.empty:
+                chunks.append(filtered)
+
+    AIS_df = pd.concat(chunks, ignore_index=True)  # concatenate all chunks into a single DataFrame
+    AIS_df = AIS_df.drop_duplicates(subset=["Name", "Ship type", "Width", "Length"])  # Remove duplicate entries based on Name, Ship type, Width, and Length
+    
+    return AIS_df
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def AIS_row_col_from_lat_lon(lat_AIS, lon_AIS, im_path):
+    """
+    Convert latitude and longitude coordinates in AIS points to row and column indices in the satellite image.
+    Args:
+        lat_AIS (list): List of latitude coordinates.
+        lon_AIS (list): List of longitude coordinates.
+        im_path (str): Path to the satellite image file.
+    Returns:
+        tuple: Two lists containing row and column indices corresponding to the latitude and longitude coordinates.
+    """
+    import rasterio as rio
+    src = rio.open(im_path)
+    
+    row_AIS = []
+    col_AIS = []
+    for latii, lonii in zip(lat_AIS, lon_AIS):
+        # Convert latitude and longitude to row and column indices
+        rowii, colii = src.index(lonii, latii)
+
+        
+        # Approach2: Use the transformation matrix to convert lat/lon to row/col [When the image transform is not available in the src object]
+        # rowii, colii = rio.transform.rowcol(transform, lonii, latii) # or rowii, colii = ~transform * (lonii, latii)
+
+        print(f"Row: {rowii}, Col: {colii}, Lat: {latii}, Lon: {lonii}")
+        
+        row_AIS.append(rowii)
+        col_AIS.append(colii)
+
+    return row_AIS, col_AIS
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def ship_patches(im_path, patch_output_dir, AIS_df, row_AIS, col_AIS, h=64, w=64,plt_ptch=False):
+    """
+    Extract patches from the image based on AIS data and save them to the specified directory.
+    
+    Parameters:
+    - im_path: Path to the input image file.
+    - patch_output_dir: Directory where the patches will be saved.
+    - row: List of row indices for AIS points.
+    - col: List of column indices for AIS points.
+    - h: Half height of the patch.
+    - w: Half width of the patch.
+    """
+    import os
+    import rasterio as rio
+    from rasterio.windows import Window
+    
+    if not os.path.exists(patch_output_dir):
+        os.makedirs(patch_output_dir)
+
+
+    src = rio.open(im_path)
+    im  = src.read(1)
+
+    patch_name_all = []
+    ii = 1
+    for r_ii, c_ii, sh_t_ii in zip(row_AIS, col_AIS, AIS_df['Ship type']):
+        if r_ii-h < 0 or r_ii+h >= im.shape[0] or c_ii-w < 0 or c_ii+w >= im.shape[1]:
+            print(f"Skipping patch for row {r_ii}, col {c_ii} due to out of bounds.")
+            patch_name_all.append('')
+            continue
+        else:
+            subii = im[r_ii-h:r_ii+h, c_ii-w:c_ii+w]
+            # Adjust metadata:
+            out_meta = src.meta.copy()
+            out_meta.update({
+                "height"   : h*2,
+                "width"    : w*2,
+                "transform": src.window_transform( Window(c_ii-w, r_ii-h, 2*w, 2*h) ),
+                "compress" :'lzw'
+            })
+            # Write the output:
+            patch_nameii = f"{im_name}_patch_{ii}_{sh_t_ii}"
+            patch_name_all.append(patch_nameii)
+            out_nameii   = f"{patch_output_dir}/{patch_nameii}.tif"
+            with rio.open(out_nameii, "w", **out_meta) as dest:
+                dest.write(subii,1)
+
+            if plt_ptch:
+                plt.figure()
+                plt.imshow(subii, cmap='gray', vmin=0, vmax=1500)
+                plt.text(h, w, f"{sh_t_ii}", fontsize=10, color='blue', ha='center', va='center')
+
+            ii += 1
+    AIS_df['Patch_name'] = patch_name_all
+    
+    return AIS_df
