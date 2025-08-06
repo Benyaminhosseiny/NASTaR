@@ -304,8 +304,6 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
     from rasterio.windows import Window
     import matplotlib.pyplot as plt
     import shutil
-
-
     
     if not os.path.exists(patch_output_dir):
         os.makedirs(patch_output_dir)
@@ -314,6 +312,13 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
         shutil.rmtree(patch_output_dir)
         os.makedirs(patch_output_dir)
 
+    if uint8:
+        if not os.path.exists(f"{patch_output_dir}_uint8"):
+            os.makedirs(f"{patch_output_dir}_uint8")
+        else:
+            # If the directory already exists, remove its files and create a new one
+            shutil.rmtree(f"{patch_output_dir}_uint8")
+            os.makedirs(f"{patch_output_dir}_uint8")
 
     src = rio.open(im_path)
     im  = src.read(1)
@@ -342,17 +347,9 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
             with rio.open(out_nameii, "w", **out_meta) as dest:
                 dest.write(subii,1)
             
-            if uint8:
-                if not os.path.exists(f"{patch_output_dir}_uint8"):
-                    os.makedirs(f"{patch_output_dir}_uint8")
-                else:
-                    # If the directory already exists, remove its files and create a new one
-                    shutil.rmtree(f"{patch_output_dir}_uint8")
-                    os.makedirs(f"{patch_output_dir}_uint8")
-                
                 subii = subii.astype('float32')
                 subii -= subii.mean()
-                subii /= 2*subii.std()
+                subii /= 5*subii.std()
                 subii += 0.5
                 subii = (255 * subii).clip(0, 255).astype('uint8')
                 
