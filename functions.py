@@ -287,7 +287,7 @@ def AIS_row_col_from_lat_lon(lat_AIS, lon_AIS, im_path):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def ship_patches(im_path, patch_output_dir, AIS_df, row_AIS, col_AIS, h=64, w=64,plt_ptch=False):
+def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=64, w=64,uint8=False, plt_ptch=False):
     """
     Extract patches from the image based on AIS data and save them to the specified directory.
     
@@ -302,8 +302,16 @@ def ship_patches(im_path, patch_output_dir, AIS_df, row_AIS, col_AIS, h=64, w=64
     import os
     import rasterio as rio
     from rasterio.windows import Window
+    import matplotlib.pyplot as plt
+    import shutil
+
+
     
     if not os.path.exists(patch_output_dir):
+        os.makedirs(patch_output_dir)
+    else:
+        # If the directory already exists, remove its files and create a new one
+        shutil.rmtree(patch_output_dir)
         os.makedirs(patch_output_dir)
 
 
@@ -333,6 +341,27 @@ def ship_patches(im_path, patch_output_dir, AIS_df, row_AIS, col_AIS, h=64, w=64
             out_nameii   = f"{patch_output_dir}/{patch_nameii}.tif"
             with rio.open(out_nameii, "w", **out_meta) as dest:
                 dest.write(subii,1)
+            
+            if uint8:
+                if not os.path.exists(f"{patch_output_dir}_uint8"):
+                    os.makedirs(f"{patch_output_dir}_uint8")
+                else:
+                    # If the directory already exists, remove its files and create a new one
+                    shutil.rmtree(f"{patch_output_dir}_uint8")
+                    os.makedirs(f"{patch_output_dir}_uint8")
+                
+                subii = subii.astype('float32')
+                subii -= subii.mean()
+                subii /= 2*subii.std()
+                subii += 0.5
+                subii = (255 * subii).clip(0, 255).astype('uint8')
+                
+                out_nameii   = f"{patch_output_dir}_uint8/{patch_nameii}_uint8.tif"
+                out_meta.update({
+                    "dtype": 'uint8',
+                })
+                with rio.open(out_nameii, "w", **out_meta) as dest:
+                    dest.write(subii,1)
 
             if plt_ptch:
                 plt.figure()
