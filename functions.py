@@ -17,7 +17,22 @@ def get_file_list(directory):
     
     # print(f"Found {len(tif_files)} tif files.")
     
-    return tif_files
+    # Group files by their parent folder:
+    from collections import defaultdict
+    from pathlib import Path
+
+    # Group files by their parent folder
+    grouped_tif_files = defaultdict(list)
+
+    for file_path in tif_files:
+        folder_name = Path(file_path).parts[-3]
+        grouped_tif_files[folder_name].append(file_path)
+
+    # Convert defaultdict to a regular dictionary for easier access
+    grouped_tif_files = dict(grouped_tif_files)
+
+
+    return tif_files, grouped_tif_files
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -44,7 +59,7 @@ def geo_info_from_metadata(metadata_path):
 
     ellipsoid = ellipsoid_elem.text if ellipsoid_elem is not None else None
     geo_info['ellipsoid'] = ellipsoid
-    print("Ellipsoid Name:", ellipsoid)
+    # print("Ellipsoid Name:", ellipsoid)
 
     # Extracting SampledLineSpacing and SampledPixelSpacing from Image_Attributes
 
@@ -55,23 +70,21 @@ def geo_info_from_metadata(metadata_path):
     elem = im_attr_info_elem.find(".//SampledLineSpacing")
     gsd_line = elem.text if elem is not None else None
     geo_info['gsd_line'] = gsd_line
-    print("Sampled Line Spacing:", gsd_line)
+    # print("Sampled Line Spacing:", gsd_line)
 
     # Extract SampledPixelSpacing
     elem = im_attr_info_elem.find(".//SampledPixelSpacing")
     gsd_pixel = elem.text if elem is not None else None
     geo_info['gsd_pixel'] = gsd_pixel
-    print("Sampled Pixel Spacing:", gsd_pixel)
+    # print("Sampled Pixel Spacing:", gsd_pixel)
 
     elem = geo_info_elem.find(".//SemiMajorAxis")
     SemiMajorAxis_name = elem.text if elem is not None else None
     geo_info['SemiMajorAxis'] = SemiMajorAxis_name
-    print("SemiMajorAxis:", SemiMajorAxis_name)
 
     elem = geo_info_elem.find(".//SemiMinorAxis")
     SemiMinorAxis_name = elem.text if elem is not None else None
     geo_info['SemiMinorAxis'] = SemiMinorAxis_name
-    print("SemiMinorAxis:", SemiMinorAxis_name)
 
     # Extract tie point information from the "geographicInformation" element
 
@@ -96,9 +109,9 @@ def geo_info_from_metadata(metadata_path):
     # print(f"Lat extent: ({lat_min}, {lat_max}), Lon extent: ({lon_min}, {lon_max})")
 
     # Display the extracted tiepoints
-    print("\nTie Points:")
-    for tp in tiepoints:
-        print(tp)
+    # print("\nTie Points:")
+    # for tp in tiepoints:
+    #     print(tp)
 
     return geo_info
 
@@ -135,7 +148,7 @@ def relative_transform_im_osm(tie_im_path, tie_osm_path):
 
     # Generate new transform using the new tiepoints information extracted from the metadata XML file:
     delta_transform = rio.transform.from_gcps(tiepoints)
-    print("Relative Transform:", delta_transform)
+    # print("Relative Transform:", delta_transform)
 
     return delta_transform
 
@@ -176,7 +189,7 @@ def new_geotif(tif_file_path, transform, crs, out_file_path):
     ) as dst:
         dst.write(im, 1)
 
-    print(f"\nSaved corrected image to {out_file_path}")
+    # print(f"\nSaved corrected image to {out_file_path}")
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -242,8 +255,12 @@ def load_AIS_df(ais_csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_b
             if not filtered.empty:
                 chunks.append(filtered)
 
-    AIS_df = pd.concat(chunks, ignore_index=True)  # concatenate all chunks into a single DataFrame
-    AIS_df = AIS_df.drop_duplicates(subset=["Name", "Ship type", "Width", "Length"])  # Remove duplicate entries based on Name, Ship type, Width, and Length
+    if len(chunks)>0:
+           AIS_df = pd.concat(chunks, ignore_index=True)  # concatenate all chunks into a single DataFrame
+           AIS_df = AIS_df.drop_duplicates(subset=["Name", "Ship type", "Width", "Length"])  # Remove duplicate entries based on Name, Ship type, Width, and Length
+    else:
+        print("No AIS data found within the specified time and spatial bounds.")
+        AIS_df = []
     
     return AIS_df
 
@@ -275,7 +292,7 @@ def AIS_row_col_from_lat_lon(lat_AIS, lon_AIS, im_path):
         # Approach2: Use the transformation matrix to convert lat/lon to row/col [When the image transform is not available in the src object]
         # rowii, colii = rio.transform.rowcol(transform, lonii, latii) # or rowii, colii = ~transform * (lonii, latii)
 
-        print(f"Row: {rowii}, Col: {colii}, Lat: {latii}, Lon: {lonii}")
+        # print(f"Row: {rowii}, Col: {colii}, Lat: {latii}, Lon: {lonii}")
         
         row_AIS.append(rowii)
         col_AIS.append(colii)
@@ -369,3 +386,159 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
     AIS_df['Patch_name'] = patch_name_all
     
     return AIS_df
+
+
+
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-  
+
+def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
+    """
+    Extract patches and AIS data from NovaSAR images.
+    
+    Parameters:
+    - tii_path: Path to the tif file to process.
+    - AIS_path: Path to the AIS data CSV file.
+    - h: Half height for patch extraction (default is 64).
+    - w: Half width for patch extraction (default is 64).
+    
+    Returns:
+    - None
+    """
+    # Import dependencies
+    import os
+    import numpy as np
+    import math
+    from datetime import datetime, date
+    import matplotlib.pyplot as plt
+    import rasterio as rio
+    from pathlib import Path
+    import json
+    from rasterio.crs import CRS
+
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+    parts = tii_path.parts
+
+    im_name = parts[-1]
+    print(f"Sample image (tii) name: {im_name}")
+    # print(f"Sample image (tii) path:\n{tii_path}")
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Find the data acquisition date from the metadata XML file:
+
+    acqdate0 = f"20{'_'.join(parts[-1].split('_')[-4:-2])}" # or f"20{tif_files[tii][-31:-18]}" # YYYYMMDD_HHMMSS
+    dt = datetime.strptime(acqdate0, '%Y%m%d_%H%M%S')
+
+    acqdate = dt.strftime('%d/%m/%Y %H:%M:%S') # DD/MM/YYYY HH:MM:SS
+    # print("Raw Data Start Time:", acqdate)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Extract Geo and Image information from the metadata XML file:
+    metadata_path = f"{tii_path}/metadata.xml"
+    geo_info = geo_info_from_metadata(metadata_path)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Generate CRS and transform using ellipsoid and tiepoints information extracted from the metadata XML file:
+
+
+    # Use ellipsoid parameters for CRS, fallback to WGS84 if not available
+    if geo_info['ellipsoid'] == "WGS84":
+        crs = CRS.from_epsg(4326)
+    else:
+        crs = CRS.from_string(f"+proj=longlat +a={geo_info['SemiMajorAxis_name']} +b={geo_info['SemiMinorAxis_name']} +no_defs")
+
+    transform0 = rio.transform.from_gcps(geo_info['tiepoints'])
+    # print("Initial Georeferencing Transformation Matrix:", transform0)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Load the modified tie points (based on OSM and NovaSAR images) from shapefiles
+
+    # Find the index of 'NovaSAR' in the path parts
+    parts = tii_path.parts
+    # nova_index = parts.index('NovaSAR')
+
+    # nova_path = Path(*parts[:nova_index + 1])
+    nova_path = Path(*parts[:-1])
+
+    tie_im_path = f"{nova_path}/modified tie points/im_points.shp"
+    tie_osm_path = f"{nova_path}/modified tie points/osm_points.shp"
+
+    delta = relative_transform_im_osm(tie_im_path, tie_osm_path)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Save the delta transform to a JSON file
+
+    # Convert to list and save
+    with open(f"{nova_path}/delta_transform.json", "w") as f:
+        json.dump(list(delta), f)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Load the delta transform from the saved JSON file
+    with open(f"{nova_path}/delta_transform.json", "r") as f:
+        delta_values = json.load(f)
+
+    # Reconstruct the Affine transform
+    from rasterio.transform import Affine
+    delta = Affine(*delta_values)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Corrected transformation matrix
+    transform=delta*transform0
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # Create a new geotiff with the corrected transformation matrix
+    new_geotif(tif_file_path = f"{tii_path}/image_HH.tif", transform = transform, crs = crs, out_file_path = f"{tii_path}/image_HH_corrected.tif")
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+    # AIS data Path:
+
+    csv_dir = AIS_path
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # LatLon extent of the geotiff image
+    lat_min, lon_min, lat_max, lon_max = get_geotif_LatLon_extent(f'{tii_path}/image_HH_corrected.tif')
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    time_buffer = [1,2]  # seconds
+    AIS_df = load_AIS_df(csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer)
+    if len(AIS_df) == 0:
+        print("No AIS data found within the specified time and spatial bounds.")
+    else:
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+        # Save the filtered AIS data to a CSV file:
+        AIS_df.to_csv(f"{tii_path}/AIS.csv", index=False)
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+        # Extract ship patches from the image and save them to a directory
+        row_AIS, col_AIS = AIS_row_col_from_lat_lon(lat_AIS = AIS_df['Latitude'], lon_AIS = AIS_df['Longitude'], im_path=f'{tii_path}/image_HH_corrected.tif')
+
+    # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+        patch_output_dir = f"{tii_path}/ship_patches"
+        AIS_df = ship_patches(im_path=f'{tii_path}/image_HH_corrected.tif', 
+                            im_name=im_name,
+                            patch_output_dir=patch_output_dir, 
+                            AIS_df=AIS_df, 
+                            row_AIS=row_AIS, 
+                            col_AIS=col_AIS, 
+                            h=h, 
+                            w=w,
+                            uint8=True,
+                            plt_ptch=False)
+
+        # Save the updated AIS data with patch names:
+        AIS_df.to_csv(f"{tii_path}/AIS.csv", index=False)
+        print(f"Saved the updated AIS data with patch_names column to {tii_path}/AIS.csv")
+
