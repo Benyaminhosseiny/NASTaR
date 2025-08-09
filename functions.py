@@ -383,6 +383,12 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
                 plt.text(h, w, f"{sh_t_ii}", fontsize=10, color='blue', ha='center', va='center')
 
             ii += 1
+    
+    # Remove empty directories if they are empty after processing (Because of patches being out of bounds)
+    if os.path.isdir(patch_output_dir) and not os.listdir(patch_output_dir):
+        os.rmdir(patch_output_dir) 
+        os.rmdir(f"{patch_output_dir}_uint8")  
+
     AIS_df['Patch_name'] = patch_name_all
     
     return AIS_df
