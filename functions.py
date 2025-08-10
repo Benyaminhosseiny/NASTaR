@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings("ignore")
 def get_file_list(directory):
     import os
 
