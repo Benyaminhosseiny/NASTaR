@@ -393,6 +393,10 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
 
     AIS_df['Patch_name'] = patch_name_all
     
+    # Remove rows where column 'Patch_name' is an empty string (out of bounds patches)
+    AIS_df = AIS_df[AIS_df['Patch_name'] != '']
+
+    
     return AIS_df
 
 
@@ -516,7 +520,7 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
     lat_min, lon_min, lat_max, lon_max = get_geotif_LatLon_extent(f'{tii_path}/image_HH_corrected.tif')
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-    time_buffer = [1,2]  # seconds
+    time_buffer = [1,4]  # seconds
     AIS_df = load_AIS_df(csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer)
     if len(AIS_df) == 0:
         print("No AIS data found within the specified time and spatial bounds.")
