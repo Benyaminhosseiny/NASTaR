@@ -161,7 +161,7 @@ def confusion_mat(label, predicted, axlabels, plot=True, savefig_path="", cmap="
     import seaborn as sn
     import matplotlib.pyplot as plt
     import pandas as pd
-    
+
     
     conf_mat    = np.float32(confusion_matrix(label, predicted))
     conf_mat_re = 100*conf_mat/np.expand_dims(np.nansum(conf_mat,axis=1),1) #Normalized Confusion Mat: Recall

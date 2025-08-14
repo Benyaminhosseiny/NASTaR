@@ -140,26 +140,19 @@ class CNN(nn.Module):
         self.classifier = FCBlock( in_features=neurons_en[-1], out_features=num_classes, dropout=0.0  )
 
     def forward(self, x):
-        # print(f"x.shape: {x.shape}")
         CBAM_out = self.CBAM_attn(x)
         if self.with_cnn:
           x = self.cnn(CBAM_out)
           x = self.max_pool(x)
         else:
           x = self.max_pool(CBAM_out)
-        # print(f"xmax_pool.shape: {x.shape}")
-        if x.shape[0] == 1:
-            x = torch.flatten(x,1)
-            # x = x.unsqueeze(0)
-        else:
-            x = torch.flatten(x,1)
-        # print(f"xflatten.shape: {x.shape}")
+        
+        x = torch.flatten(x,1)
+        
         x = self.FC(x)
-        # print(f"xFC.shape: {x.shape}")
 
         # Classifier:
         y = self.classifier(x)
-        # print(f"y.shape: {y.shape}")
 
         # Outputs:
         spatial_map = CBAM_out.max(dim=1, keepdim=True)[0]
