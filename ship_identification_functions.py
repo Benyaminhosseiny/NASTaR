@@ -92,10 +92,11 @@ class ShipDataset(Dataset):
             img = img.astype(np.float32)  # Convert to float32 for processing
 
             # Normalize the image [0-1]:
+            # img /= img.max()
             img -= img.mean()
             img /= 5*img.std()
             img += 0.5
-            img  = img.clip(0, 1) # Clip values to [0, 1] range
+            # img  = img.clip(0, 1) # Clip values to [0, 1] range
 
         tensor_img = torch.tensor(img, dtype=torch.float32)
         label_idx = self.labels[idx]
@@ -110,19 +111,26 @@ class ShipDataset(Dataset):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 class ShipDatasetMemory(Dataset):
-    def __init__(self, images, labels):
+    def __init__(self, images, labels, transform=None):
         self.images = images
         self.labels = labels
         self.num_classes = max(labels)
+        self.transform = transform
 
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
         img = self.images[idx]
+        label_idx = self.labels[idx]
+
 
         tensor_img = torch.tensor(img, dtype=torch.float32)
-        label_idx = self.labels[idx]
+
+        # Apply data augmentation if transform is provided
+        if self.transform:
+            tensor_img = self.transform(tensor_img)
+        
         label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
         label_onehot[label_idx - 1] = 1.0
         return tensor_img, label_onehot
@@ -142,10 +150,11 @@ def load_images_to_memory(image_paths):
             imgii = imgii.astype(np.float32)  # Ensure float32 type
 
             # Normalize the image [0-1]:
+            # imgii /= imgii.max()
             imgii -= imgii.mean()
             imgii /= 5*imgii.std()
             imgii += 0.5
-            imgii = imgii.clip(0, 1) # Clip values to [0, 1] range
+            # imgii = imgii.clip(0, 1) # Clip values to [0, 1] range
             images.append(imgii)
     
     return np.array(images)

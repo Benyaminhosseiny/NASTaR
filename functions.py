@@ -549,8 +549,8 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
                             w=w,
                             uint8=True,
                             plt_ptch=False)
-
-        # Save the updated AIS data with patch names:
-        AIS_df.to_csv(f"{tii_path}/AIS.csv", index=False)
-        print(f"Saved the updated AIS data with patch_names column to {tii_path}/AIS.csv")
+        if len(AIS_df) != 0:
+            # Save the updated AIS data with patch names:
+            AIS_df.to_csv(f"{tii_path}/AIS.csv", index=False)
+            print(f"Saved the updated AIS data with patch_names column to {tii_path}/AIS.csv")
 
