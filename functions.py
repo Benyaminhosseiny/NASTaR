@@ -477,7 +477,7 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
     # nova_path = Path(*parts[:nova_index + 1])
     nova_path = Path(*parts[:-1])
 
-    tie_im_path = f"{nova_path}/modified tie points/im_points.shp"
+    tie_im_path  = f"{nova_path}/modified tie points/im_points.shp"
     tie_osm_path = f"{nova_path}/modified tie points/osm_points.shp"
 
     delta = relative_transform_im_osm(tie_im_path, tie_osm_path)
@@ -549,8 +549,11 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
                             w=w,
                             uint8=True,
                             plt_ptch=False)
-        if len(AIS_df) != 0:
+        
+        if len(AIS_df) != 0 and 'Patch_name' in AIS_df.columns:
             # Save the updated AIS data with patch names:
             AIS_df.to_csv(f"{tii_path}/AIS.csv", index=False)
             print(f"Saved the updated AIS data with patch_names column to {tii_path}/AIS.csv")
+        else:
+            os.remove(f"{tii_path}/AIS.csv")
 

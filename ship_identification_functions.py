@@ -92,7 +92,7 @@ class ShipDataset(Dataset):
             img = img.astype(np.float32)  # Convert to float32 for processing
 
             # Normalize the image [0-1]:
-            # img /= img.max()
+            img /= img.max()
             img -= img.mean()
             img /= 5*img.std()
             img += 0.5
@@ -150,7 +150,7 @@ def load_images_to_memory(image_paths):
             imgii = imgii.astype(np.float32)  # Ensure float32 type
 
             # Normalize the image [0-1]:
-            # imgii /= imgii.max()
+            imgii /= imgii.max()
             imgii -= imgii.mean()
             imgii /= 5*imgii.std()
             imgii += 0.5
