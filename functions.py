@@ -224,7 +224,7 @@ def get_geotif_LatLon_extent(tif_file_path):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def load_AIS_df(ais_csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer=[1]):
+def load_AIS_df(ais_csv_dir, acqdate=None, lat_min=None, lon_min=None, lat_max=None, lon_max=None, time_buffer=[1], remove_duplicate_names=True):
     """
     Load AIS data from a CSV file and filter it based on acquisition date and spatial extent.
     
@@ -246,20 +246,27 @@ def load_AIS_df(ais_csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_b
     
     chunks = []
     for t_bii in time_buffer:
-        start_time = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') - timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
-        end_time   = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') + timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
+        if acqdate != None:
+            start_time = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') - timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
+            end_time   = (datetime.strptime(acqdate, '%d/%m/%Y %H:%M:%S') + timedelta(seconds=t_bii)).strftime('%d/%m/%Y %H:%M:%S')
 
         for chunk in pd.read_csv(ais_csv_dir, chunksize=500000):
-            mask = (chunk[timestamp_col] >= start_time) & (chunk[timestamp_col] <= end_time) & \
-                   (chunk[lat_col] >= lat_min) & (chunk[lat_col] <= lat_max) & \
-                   (chunk[lon_col] >= lon_min) & (chunk[lon_col] <= lon_max)
+            if acqdate != None:
+                mask = (chunk[timestamp_col] >= start_time) & (chunk[timestamp_col] <= end_time) & \
+                    (chunk[lat_col] >= lat_min) & (chunk[lat_col] <= lat_max) & \
+                    (chunk[lon_col] >= lon_min) & (chunk[lon_col] <= lon_max)
+            else:
+                mask = (chunk[lat_col] >= lat_min) & (chunk[lat_col] <= lat_max) & \
+                    (chunk[lon_col] >= lon_min) & (chunk[lon_col] <= lon_max)
+
             filtered = chunk[mask]
             if not filtered.empty:
                 chunks.append(filtered)
 
     if len(chunks)>0:
            AIS_df = pd.concat(chunks, ignore_index=True)  # concatenate all chunks into a single DataFrame
-           AIS_df = AIS_df.drop_duplicates(subset=["Name", "Ship type", "Width", "Length"])  # Remove duplicate entries based on Name, Ship type, Width, and Length
+           if remove_duplicate_names:
+               AIS_df = AIS_df.drop_duplicates(subset=["Name", "Ship type", "Width", "Length"])  # Remove duplicate entries based on Name, Ship type, Width, and Length
     else:
         print("No AIS data found within the specified time and spatial bounds.")
         AIS_df = []
@@ -521,6 +528,7 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     time_buffer = [1,4]  # seconds
+    time_buffer = [1,10]  # seconds
     AIS_df = load_AIS_df(csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer)
     if len(AIS_df) == 0:
         print("No AIS data found within the specified time and spatial bounds.")
