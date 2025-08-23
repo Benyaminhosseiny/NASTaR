@@ -99,11 +99,12 @@ class ShipDataset(Dataset):
             # img  = img.clip(0, 1) # Clip values to [0, 1] range
 
         tensor_img = torch.tensor(img, dtype=torch.float32)
-        label_idx = self.labels[idx]
+        label_idx = self.labels[idx]-1
 
-        label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
-        label_onehot[label_idx - 1] = 1.0
-        return tensor_img, label_onehot
+        # label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
+        # label_onehot[label_idx ] = 1.0
+        # return tensor_img, label_onehot
+        return tensor_img, label_idx
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -122,19 +123,19 @@ class ShipDatasetMemory(Dataset):
 
     def __getitem__(self, idx):
         img = self.images[idx]
-        label_idx = self.labels[idx]
+        label_idx = self.labels[idx]-1
 
 
         tensor_img = torch.tensor(img, dtype=torch.float32)
 
         # Apply data augmentation if transform is provided
         if self.transform:
-            tensor_img = self.transform(tensor_img)
-        
-        label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
-        label_onehot[label_idx - 1] = 1.0
-        return tensor_img, label_onehot
-    
+            tensor_img = self.transform(tensor_img)  
+
+        # label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
+        # label_onehot[label_idx ] = 1.0
+        # return tensor_img, label_onehot
+        return tensor_img, label_idx
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
