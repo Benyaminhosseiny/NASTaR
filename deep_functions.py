@@ -107,9 +107,11 @@ class CBAM(nn.Module):
 from typing import Dict, List
 
 class CNN(nn.Module):
-    def __init__( self, in_channels, num_classes, BackBone, FC_input_dim, FC_neurons: List[int] ):
+    def __init__( self, in_channels, num_classes, BackBone, FC_input_dim, FC_neurons: List[int], FC_dropout=[], input_CBAM=False ):
         super( CNN, self ).__init__()
-        self.CBAM_attn = CBAM( channel=in_channels, reduction=1, kernel_size=3 )
+        self.input_CBAM = input_CBAM
+        if input_CBAM:
+            self.CBAM_attn = CBAM( channel=in_channels, reduction=1, kernel_size=3 )
 
         if BackBone !='':
           self.with_cnn = True
@@ -125,12 +127,13 @@ class CNN(nn.Module):
           # neurons_en = [256]+FC_neurons
         else:
           neurons_en = [in_channels]+FC_neurons # if ResNet ignored!
-
+        if FC_dropout==[]:
+            FC_dropout=[0.0]*(len(neurons_en)-1)
         FC = []
         for ii in range( len(neurons_en)-1 ):
             FC.append( FCBlock( in_features=neurons_en[ii],
                                 out_features=neurons_en[ii+1],
-                                dropout=0.0
+                                dropout=FC_dropout[ii]
                               )
             )
         self.FC = nn.Sequential( *FC )
@@ -140,12 +143,20 @@ class CNN(nn.Module):
         self.classifier = FCBlock( in_features=neurons_en[-1], out_features=num_classes, dropout=0.0  )
 
     def forward(self, x):
-        CBAM_out = self.CBAM_attn(x)
+        if self.input_CBAM:
+            CBAM_out = self.CBAM_attn(x)
         if self.with_cnn:
-          x = self.cnn(CBAM_out)
-          x = self.max_pool(x)
+          if self.input_CBAM:
+            x = self.cnn(CBAM_out)
+            x = self.max_pool(x)
+          else:
+            x = self.cnn(x)
+            x = self.max_pool(x)
         else:
-          x = self.max_pool(CBAM_out)
+          if self.input_CBAM:
+            x = self.max_pool(CBAM_out)
+          else:
+            x = self.max_pool(x)
         
         x = torch.flatten(x,1)
         
@@ -155,13 +166,74 @@ class CNN(nn.Module):
         y = self.classifier(x)
 
         # Outputs:
-        spatial_map = CBAM_out.max(dim=1, keepdim=True)[0]
-        channel_map = CBAM_out.max(dim=2, keepdim=True)[0]
-        channel_map = channel_map.max(dim=3, keepdim=True)[0]
+        if self.input_CBAM:
+            spatial_map = CBAM_out.max(dim=1, keepdim=True)[0]
+            channel_map = CBAM_out.max(dim=2, keepdim=True)[0]
+            channel_map = channel_map.max(dim=3, keepdim=True)[0]
+        else:
+            spatial_map = []
+            channel_map = []
 
         out = {}
         out["classifier"]  = y
         out["Encoder"]     = x
         out["spatial_map"] = spatial_map
         out["channel_map"] = channel_map
+        return out
+    
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# AlexNet:
+
+
+class AlexNet(nn.Module):
+
+    def __init__(self, in_channels, num_classes):
+        super(AlexNet, self).__init__()
+
+
+        self.features = nn.Sequential(
+            nn.Conv2d(in_channels, 96, kernel_size=11, stride=4, padding=0),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+
+            nn.Conv2d(96, 256, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+
+            nn.Conv2d(256, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(384, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.5),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, num_classes)
+        )
+        
+        
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), 256 * 6 * 6)
+        logits = self.classifier(x)
+        
+        out = {}
+        out["classifier"]  = logits
         return out

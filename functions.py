@@ -13,9 +13,9 @@ def get_file_list(directory):
                     tif_files.append(full_path)
 
 
-    # tif_files = [f for f in tif_files if not os.path.basename(f).startswith('QL')] # Exclude files starting with 'QL' [These are low resolution files only for visualisation]
+    tif_files = [f for f in tif_files if os.path.basename(f).startswith('image_') and '_corrected' not in os.path.basename(f)] # Exclude files starting with 'QL' [These are low resolution files only for visualisation]
     # tif_files = [f for f in tif_files if os.path.basename(f).startswith('image_HH.tif')] # Keep only files starting with 'image_HH.tif' [These are the high resolution files for processing]
-    tif_files = [f for f in tif_files if os.path.basename(f) == 'image_HH.tif'] # Keep only files 'image_HH.tif' [These are the high resolution files for processing]
+    # tif_files = [f for f in tif_files if os.path.basename(f) == 'image_HH.tif'] # Keep only files 'image_HH.tif' [These are the high resolution files for processing]
     
     # print(f"Found {len(tif_files)} tif files.")
     
@@ -511,7 +511,13 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # Create a new geotiff with the corrected transformation matrix
-    new_geotif(tif_file_path = f"{tii_path}/image_HH.tif", transform = transform, crs = crs, out_file_path = f"{tii_path}/image_HH_corrected.tif")
+
+    # Image name: can be image_VV or image_HH, ...
+    
+    im_name = [ f for f in os.listdir(tii_path) if f.startswith('image_') and f.endswith('.tif') and 'corrected' not in f ][0]
+    im_name_corr = f"{im_name[:-4]}_corrected.tif"
+
+    new_geotif(tif_file_path = f"{tii_path}/{im_name}", transform = transform, crs = crs, out_file_path = f"{tii_path}/{im_name_corr}")
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -524,11 +530,10 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # LatLon extent of the geotiff image
-    lat_min, lon_min, lat_max, lon_max = get_geotif_LatLon_extent(f'{tii_path}/image_HH_corrected.tif')
+    lat_min, lon_min, lat_max, lon_max = get_geotif_LatLon_extent(f'{tii_path}/{im_name_corr}')
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-    time_buffer = [1,4]  # seconds
-    time_buffer = [1,10]  # seconds
+    time_buffer = [4,4]   # [before the SAR acquisition, after the SAR acquisition] seconds
     AIS_df = load_AIS_df(csv_dir, acqdate, lat_min, lon_min, lat_max, lon_max, time_buffer)
     if len(AIS_df) == 0:
         print("No AIS data found within the specified time and spatial bounds.")
@@ -543,11 +548,11 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
         # Extract ship patches from the image and save them to a directory
-        row_AIS, col_AIS = AIS_row_col_from_lat_lon(lat_AIS = AIS_df['Latitude'], lon_AIS = AIS_df['Longitude'], im_path=f'{tii_path}/image_HH_corrected.tif')
+        row_AIS, col_AIS = AIS_row_col_from_lat_lon(lat_AIS = AIS_df['Latitude'], lon_AIS = AIS_df['Longitude'], im_path=f'{tii_path}/{im_name_corr}')
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         patch_output_dir = f"{tii_path}/ship_patches"
-        AIS_df = ship_patches(im_path=f'{tii_path}/image_HH_corrected.tif', 
+        AIS_df = ship_patches(im_path=f'{tii_path}/{im_name_corr}', 
                             im_name=im_name,
                             patch_output_dir=patch_output_dir, 
                             AIS_df=AIS_df, 
