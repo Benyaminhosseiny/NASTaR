@@ -4,10 +4,15 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 import torch
+from torch import nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import os
+
 import warnings
 warnings.filterwarnings('ignore')
 
-def tr_te_sample( gt_1d, tr_samples, val_samples ): 
+def tr_te_sample( gt_1d, tr_samples, val_samples, random_seed=1 ): 
   """
   Function to sample training, validation, and test indices from a 1D ground truth array
   gt_1d: 1D array of ground truth labels
@@ -19,7 +24,7 @@ def tr_te_sample( gt_1d, tr_samples, val_samples ):
   import numpy as np
   from copy import deepcopy
     
-  np.random.seed(1)
+  np.random.seed(random_seed)
   tr_idx_L_ii   = []
   te_idx_L_ii   = []
   val_idx_L_ii  = []
@@ -159,6 +164,232 @@ def load_images_to_memory(image_paths):
             images.append(imgii)
     
     return np.array(images)
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+# Custom Loss Functions for Imbalanced Data Training:
+def class_weights_from_counts(class_counts, beta=0.999): 
+    ''' Effective number of samples weighting (Cui et al., 2019) beta= 0.9~0.999
+        class_counts: Class counts
+    '''
+    class_counts = torch.tensor(class_counts, dtype=torch.float32)
+    eff_num = 1.0 - torch.pow(beta, class_counts)
+    weights = (1.0 - beta) / (eff_num + 1e-12)
+    weights = weights / weights.mean()  # normalize for stability
+    return weights
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+def effective_weighted_ce(logits, targets, class_counts, beta=0.999):
+    class_weights = class_weights_from_counts(class_counts, beta=beta).to(logits.device)
+    return F.cross_entropy(logits, targets, weight=class_weights)
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+def logit_adjusted_ce(logits, targets, class_counts, tau=1.0):
+    # class_counts: list/1D tensor of length C
+    counts = torch.tensor(class_counts, dtype=torch.float32, device=logits.device)
+    priors = counts / counts.sum()
+    adjust = tau * torch.log(priors + 1e-12)  # tau ~ 1.0
+    logits_adj = logits + adjust  # broadcast to batch
+    return F.cross_entropy(logits_adj, targets)
+
+
+class SoftMacroF1Loss(nn.Module):
+    """
+    Differentiable approximation of macro-F1 for multi-class classification.
+    Uses softmax probabilities to compute soft TP/FP/FN per class over the batch.
+    """
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        logits:  [B, C] pre-softmax
+        targets: [B] int64 class indices in [0..C-1]
+        returns: 1 - soft_macro_f1 (so it's a loss to minimize)
+        """
+        B, C = logits.shape
+        probs    = F.softmax(logits, dim=1)               # [B, C]
+        y_onehot = F.one_hot(targets.long(), num_classes=C).float()  # [B, C]
+
+        # Soft counts over the batch
+        tp = (probs * y_onehot).sum(dim=0)                      # [C]
+        fp = (probs * (1.0 - y_onehot)).sum(dim=0)              # [C]
+        fn = ((1.0 - probs) * y_onehot).sum(dim=0)              # [C]
+
+        soft_f1_per_class = (2 * tp) / (2 * tp + fp + fn + self.eps)
+        soft_macro_f1 = soft_f1_per_class.mean()
+
+        return 1.0 - soft_macro_f1  # minimize
+    
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimizer, scheduler_class, class_weights_tensor, num_epochs, num_reps, weight_export_name):
+    # Training loop for model using tr_dataloader and val_dataloader
+    device = class_weights_tensor.device
+    # Loss Functions:
+    BCELogitsLoss = torch.nn.BCEWithLogitsLoss(weight=class_weights_tensor)  # For multi-label one-hot targets
+    # BCELogitsLoss = torch.nn.BCEWithLogitsLoss()#weight=class_weights_tensor)  # For multi-label one-hot targets
+    CELoss = torch.nn.CrossEntropyLoss()#weight=class_weights_tensor)
+    F1Loss = SoftMacroF1Loss()
+
+    loss_history          = {}  # To store training and validation losses
+    loss_history['train'] = []
+    loss_history['val']   = []
+    loss_condition_min = np.inf
+    learning_rate0 = optimizer.param_groups[0]['lr']
+    weight_decay0  = optimizer.param_groups[0].get('weight_decay', 0)
+    for repii in range(num_reps):  # Repeat training for robustness
+        print("=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=")
+        
+        optimizerii = type(optimizer)(model.parameters(), lr=learning_rate0, weight_decay=weight_decay0)
+        schedulerii = scheduler_class(optimizer)
+
+        
+        for epoch in range(num_epochs):
+            model.train()
+            train_loss = 0.0
+            for X_batch, y_batch in tr_dataloader:
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                if X_batch.shape[0] != 1:
+                    optimizerii.zero_grad()
+                    pred_logits = model(X_batch)["classifier"]/SM_temp
+                    
+                    ce_loss = BCELogitsLoss(pred_logits, F.one_hot(y_batch.long(), num_classes=N_classes).float())
+                    # ce_loss = F.cross_entropy(pred_logits, y_batch, weight=class_weights_tensor)
+                    # ce_loss = effective_weighted_ce(pred_logits, y_batch, class_counts=np.unique_counts(tr_label)[1], beta=0.99)
+                    # ce_loss = logit_adjusted_ce(pred_logits, y_batch, class_counts=np.unique_counts(tr_label)[1])
+                    # ce_loss = F.cross_entropy(pred_logits, y_batch)
+                    f1_loss = F1Loss(pred_logits, y_batch)
+                    
+                    loss = ce_loss+0.001*f1_loss
+                    
+                    loss.backward()
+                    optimizerii.step()
+                    train_loss += loss.item() * X_batch.size(0)
+
+            train_loss /= len(tr_dataloader.dataset)
+
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for X_val, y_val in val_dataloader:
+                    X_val, y_val = X_val.to(device), y_val.to(device)
+                    pred_logits = model(X_val)["classifier"]/SM_temp
+                    
+                    ce_loss = BCELogitsLoss(pred_logits, F.one_hot(y_val.long(), num_classes=N_classes).float())
+                    # ce_loss = F.cross_entropy(pred_logits, y_val, weight=class_weights_tensor)
+                    # ce_loss = effective_weighted_ce(pred_logits, y_val, class_counts=np.unique_counts(tr_label)[1], beta=0.99)
+                    # ce_loss = logit_adjusted_ce(pred_logits, y_val, class_counts=np.unique_counts(tr_label)[1])
+                    # ce_loss = F.cross_entropy(pred_logits, y_val)
+                    f1_loss = F1Loss(pred_logits, y_val)
+                    
+                    loss = ce_loss+0.001*f1_loss
+                    
+                    val_loss += loss.item() * X_val.size(0)
+            
+            val_loss /= len(val_dataloader.dataset)
+            
+            schedulerii.step(val_loss)
+            # exp_scheduler.step()
+            
+            loss_condition = (9*val_loss + 1*train_loss)/10  # Combined loss condition
+            # loss_condition = 1*val_loss + 0*train_loss  # Combined loss condition
+            
+            if loss_condition <= loss_condition_min:
+
+                print(f"Repeat {repii+1}: Epoch {epoch+1:3.0f}/{num_epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} --> Loss condition decreased!")
+                loss_condition_min = loss_condition
+                # Save the model if validation loss improves
+                best_weights = model.state_dict()
+                if os.path.exists(weight_export_name):
+                    os.remove(weight_export_name)
+                torch.save(best_weights, weight_export_name)
+            else:
+                print(f"Repeat {repii+1}: Epoch {epoch+1:3.0f}/{num_epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+                if epoch % 1 == 0:
+                    model.load_state_dict( torch.load(weight_export_name, map_location=device) )
+            
+            
+            loss_history['train'].append(train_loss)
+            loss_history['val']  .append(val_loss)
+            
+        model.load_state_dict( torch.load(weight_export_name, map_location=device) )
+
+        # model.eval()
+        # train_loss = 0.0
+        # val_loss = 0.0
+        # with torch.no_grad():
+        #     for X_batch, y_batch in tr_dataloader:
+        #         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        #         outputs = model(X_batch)["classifier"]
+        #         loss = criterion(outputs, y_batch)
+        #         train_loss += loss.item() * X_batch.size(0)
+        #     train_loss /= len(tr_dataloader.dataset)
+                
+        #     for X_val, y_val in val_dataloader:
+        #         X_val, y_val = X_val.to(device), y_val.to(device)
+        #         outputs = model(X_val)["classifier"]
+        #         loss = criterion(outputs, y_val)
+        #         val_loss += loss.item() * X_val.size(0)
+        #     val_loss /= len(val_dataloader.dataset)
+        #     print(f"\nLOADING THE BEST WEIGHTS in Repeat {repii+1}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}\n\n")
+
+    return model, loss_history
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def model_inference(model, dataloader, label_names, device, show=False):
+    from sklearn.metrics import confusion_matrix, accuracy_score
+    import torch
+
+    # Inference on training set
+    model.eval()
+    y_true = []
+    y_pred = []
+
+    with torch.no_grad():
+        for X_batch, y_batch in dataloader:
+            X_batch = X_batch.to(device)
+            outputs = model(X_batch)["classifier"]
+            preds  = torch.argmax(outputs, dim=1).cpu().numpy()
+            # labels = torch.argmax(y_batch, dim=1).cpu().numpy()
+            labels = y_batch.cpu().numpy()
+            y_true.extend(labels)
+            y_pred.extend(preds)
+
+            if show:
+                for Xii, Yii, Pii in zip(X_batch, labels, preds):
+                    plt.figure(figsize=(3, 3))
+                    plt.imshow(Xii.cpu().detach().numpy()[0], cmap='gray')
+                    plt.title(f"Predicted Label: {Pii+1} {label_names[Pii]}\nTrue Label: {Yii+1} {label_names[Yii]}")
+                    plt.axis('off')
+                    plt.show()
+
+    cm = confusion_matrix(y_true, y_pred)
+    oa = accuracy_score(y_true, y_pred)
+    
+    return y_true, y_pred, cm, oa
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
