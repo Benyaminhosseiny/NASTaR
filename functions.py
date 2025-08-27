@@ -352,6 +352,9 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
     patch_name_all = []
     ii = 1
     for r_ii, c_ii, sh_t_ii in zip(row_AIS, col_AIS, AIS_df['Ship type']):
+        
+        if '/' in sh_t_ii:
+            sh_t_ii = sh_t_ii.replace('/', '-')
         if r_ii-h < 0 or r_ii+h >= im.shape[0] or c_ii-w < 0 or c_ii+w >= im.shape[1]:
             print(f"Skipping patch for row {r_ii}, col {c_ii} due to out of bounds.")
             patch_name_all.append('')
@@ -370,6 +373,7 @@ def ship_patches(im_path, im_name,patch_output_dir, AIS_df, row_AIS, col_AIS, h=
             patch_nameii = f"{im_name}_patch_{ii}_{sh_t_ii}"
             patch_name_all.append(patch_nameii)
             out_nameii   = f"{patch_output_dir}/{patch_nameii}.tif"
+            print(f"out_nameii: {out_nameii}")
             with rio.open(out_nameii, "w", **out_meta) as dest:
                 dest.write(subii,1)
             
@@ -444,17 +448,21 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
 
     parts = tii_path.parts
 
-    im_name = parts[-1]
-    print(f"Sample image (tii) name: {im_name}")
+    scene_name = parts[-1]
+    print(f"Sample image (tii) name: {scene_name}")
     # print(f"Sample image (tii) path:\n{tii_path}")
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # Find the data acquisition date from the metadata XML file:
 
-    acqdate0 = f"20{'_'.join(parts[-1].split('_')[-4:-2])}" # or f"20{tif_files[tii][-31:-18]}" # YYYYMMDD_HHMMSS
-    dt = datetime.strptime(acqdate0, '%Y%m%d_%H%M%S')
 
-    acqdate = dt.strftime('%d/%m/%Y %H:%M:%S') # DD/MM/YYYY HH:MM:SS
-    # print("Raw Data Start Time:", acqdate)
+    try:
+        acqdate0 = f"20{'_'.join(scene_name.split('_')[-4:-2])}" # or f"20{tif_files[tii][-31:-18]}" # YYYYMMDD_HHMMSS
+        dt       = datetime.strptime(acqdate0, '%Y%m%d_%H%M%S')
+        acqdate  = dt.strftime('%d/%m/%Y %H:%M:%S') # DD/MM/YYYY HH:MM:SS
+    except:
+        acqdate0 = f"20{'_'.join(scene_name.split('_')[-3:-1])}" # or f"20{tif_files[tii][-31:-18]}" # YYYYMMDD_HHMMSS
+        dt       = datetime.strptime(acqdate0, '%Y%m%d_%H%M%S')
+        acqdate  = dt.strftime('%d/%m/%Y %H:%M:%S') # DD/MM/YYYY HH:MM:SS
 
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # Extract Geo and Image information from the metadata XML file:
@@ -553,7 +561,7 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         patch_output_dir = f"{tii_path}/ship_patches"
         AIS_df = ship_patches(im_path=f'{tii_path}/{im_name_corr}', 
-                            im_name=im_name,
+                            im_name=scene_name,
                             patch_output_dir=patch_output_dir, 
                             AIS_df=AIS_df, 
                             row_AIS=row_AIS, 
