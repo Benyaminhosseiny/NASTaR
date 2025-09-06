@@ -1,0 +1,6 @@
+# Ignore all .pth and .pt files
+*.pth
+*.pt
+
+# Ignore the directory:
+/Prithvi-EO-2.0-300M

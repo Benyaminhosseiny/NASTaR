@@ -144,14 +144,14 @@ class CNN(nn.Module):
 
     def forward(self, x):
         if self.input_CBAM:
-            CBAM_out = self.CBAM_attn(x)
+            CBAM_out = self.CBAM_attn(x) # (b,c,r,w)
         if self.with_cnn:
           if self.input_CBAM:
             x = self.cnn(CBAM_out)
             x = self.max_pool(x)
           else:
-            x = self.cnn(x)
-            x = self.max_pool(x)
+            x = self.cnn(x) # (b,f,r,w)
+            x = self.max_pool(x) # (b,f,1,1)
         else:
           if self.input_CBAM:
             x = self.max_pool(CBAM_out)
