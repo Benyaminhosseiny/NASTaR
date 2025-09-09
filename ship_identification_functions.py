@@ -141,6 +141,7 @@ class ShipDatasetMemory(Dataset):
         # label_onehot[label_idx ] = 1.0
         # return tensor_img, label_onehot
         return tensor_img, label_idx
+
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -164,6 +165,73 @@ def load_images_to_memory(image_paths):
             images.append(imgii)
     
     return np.array(images)
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def Encoded_images(encoder, im_dataloader, device):
+    with torch.no_grad():
+        X_encoded_all = []
+        y_all = []
+        for X_im, y in im_dataloader:
+            X_im, y = X_im.to(device), y.to(device)
+            X_encoded = encoder(X_im)
+            X_encoded_all.append(X_encoded)#.cpu().numpy())
+            y_all.append(y)#.cpu().numpy())
+    return torch.cat(X_encoded_all), torch.cat(y_all)
+
+class EncodedDatasetMemory(Dataset):
+    def __init__(self, encoded_tnsr, labels, transform=None):
+        self.encoded_tnsr = encoded_tnsr
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.encoded_tnsr)
+
+    def __getitem__(self, idx):
+        encoded_tnsrii = self.encoded_tnsr[idx]
+        label_idx = self.labels[idx] # Note: In contrast to the ShipDatasetMemory, here we don't need to '-1' the labels because they are already in the range [1, N_classes]
+
+        # Apply data augmentation if transform is provided
+        if self.transform:
+            encoded_tnsrii = self.transform(encoded_tnsrii)  
+
+        return encoded_tnsrii, label_idx
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def Augmentation_Samples(images, labels, transformations, batch_size, rep=1):
+    """ 
+    images: numpy array (N, C, H, W)
+    labels: numpy array (N,) 
+    tranformations: done by pytorch transform class
+    batch_size: batch size for DataLoader
+    rep: number of repeating the process --> size of final samples would be rep*N
+    """
+    
+    # Apply data augmentation to training dataset
+    dataset_augmented = ShipDatasetMemory( images, labels=labels, transform=transformations )
+    # Create a new DataLoader for augmented training data
+    dataloader_aug = DataLoader(dataset_augmented, batch_size=batch_size, shuffle=True)
+    
+    # Generating samples:
+    X_aug_all = []
+    y_aug_all = []
+    for _ in range(rep):
+        for X_aug, y_aug in dataloader_aug:
+            X_aug_all.append( X_aug.numpy() )
+            y_aug_all.append( y_aug.numpy()+1 )
+    X_aug_all = np.concatenate(X_aug_all)
+    y_aug_all = np.concatenate(y_aug_all)
+
+    return X_aug_all, y_aug_all
+
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
