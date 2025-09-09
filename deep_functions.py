@@ -106,9 +106,9 @@ class CBAM(nn.Module):
 """ MODELS"""
 from typing import Dict, List
 
-class CNN(nn.Module):
-    def __init__( self, in_channels, num_classes, BackBone, FC_input_dim, FC_neurons: List[int], FC_dropout=[], input_CBAM=False ):
-        super( CNN, self ).__init__()
+class DeepModel(nn.Module):
+    def __init__( self, in_channels, num_classes, BackBone, FC_input_dim, FC_neurons: List[int], num_ensemble=1, FC_dropout=[], input_CBAM=False ):
+        super( DeepModel, self ).__init__()
         self.input_CBAM = input_CBAM
         if input_CBAM:
             self.CBAM_attn = CBAM( channel=in_channels, reduction=1, kernel_size=3 )
@@ -124,23 +124,27 @@ class CNN(nn.Module):
         # Define Fully-connected:
         if self.with_cnn:
           neurons_en = [FC_input_dim]+FC_neurons # if with ResNet! and input patch dimensions: 512x512
-          # neurons_en = [256]+FC_neurons
+
         else:
           neurons_en = [in_channels]+FC_neurons # if ResNet ignored!
+        
         if FC_dropout==[]:
             FC_dropout=[0.0]*(len(neurons_en)-1)
-        FC = []
-        for ii in range( len(neurons_en)-1 ):
-            FC.append( FCBlock( in_features=neurons_en[ii],
-                                out_features=neurons_en[ii+1],
-                                dropout=FC_dropout[ii]
-                              )
-            )
-        self.FC = nn.Sequential( *FC )
-
-
-        # Define classifier:
-        self.classifier = FCBlock( in_features=neurons_en[-1], out_features=num_classes, dropout=0.0  )
+        
+        self.FC_branch = nn.ModuleList()
+        for branchii in range( num_ensemble ):
+            FC = []
+            for ii in range( len(neurons_en)-1 ):
+                FC.append( FCBlock( in_features=neurons_en[ii],
+                                    out_features=neurons_en[ii+1],
+                                    dropout=FC_dropout[ii]
+                                )
+                )
+            
+            FC.append( FCBlock( in_features=neurons_en[-1], out_features=num_classes, dropout=0.0  ) ) # Classifier
+            FC = nn.Sequential( *FC )
+            
+            self.FC_branch.append( FC )
 
     def forward(self, x):
         if self.input_CBAM:
@@ -160,10 +164,11 @@ class CNN(nn.Module):
         
         x = torch.flatten(x,1)
         
-        x = self.FC(x)
+        y = []
+        for FCii in self.FC_branch:
+            yii = FCii(x)
+            y.append( yii )
 
-        # Classifier:
-        y = self.classifier(x)
 
         # Outputs:
         if self.input_CBAM:

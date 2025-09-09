@@ -331,7 +331,9 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 if X_batch.shape[0] != 1:
                     optimizerii.zero_grad()
-                    pred_logits = model(X_batch)["classifier"]/SM_temp
+                    pred_logits = model(X_batch)["classifier"]
+                    pred_logits = torch.stack(pred_logits, dim=0).mean(dim=0)/SM_temp  # Average ensemble outputs
+                    
                     
                     ce_loss = BCELogitsLoss(pred_logits, F.one_hot(y_batch.long(), num_classes=N_classes).float())
                     # ce_loss = F.cross_entropy(pred_logits, y_batch, weight=class_weights_tensor)
@@ -353,7 +355,8 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
             with torch.no_grad():
                 for X_val, y_val in val_dataloader:
                     X_val, y_val = X_val.to(device), y_val.to(device)
-                    pred_logits = model(X_val)["classifier"]/SM_temp
+                    pred_logits = model(X_val)["classifier"]
+                    pred_logits = torch.stack(pred_logits, dim=0).mean(dim=0)/SM_temp  # Average ensemble outputs
                     
                     ce_loss = BCELogitsLoss(pred_logits, F.one_hot(y_val.long(), num_classes=N_classes).float())
                     # ce_loss = F.cross_entropy(pred_logits, y_val, weight=class_weights_tensor)
@@ -433,6 +436,8 @@ def model_inference(model, dataloader, label_names, device, show=False):
         for X_batch, y_batch in dataloader:
             X_batch = X_batch.to(device)
             outputs = model(X_batch)["classifier"]
+            outputs = torch.stack(outputs, dim=0).mean(dim=0)  # Average ensemble outputs
+
             preds  = torch.argmax(outputs, dim=1).cpu().numpy()
             # labels = torch.argmax(y_batch, dim=1).cpu().numpy()
             labels = y_batch.cpu().numpy()
