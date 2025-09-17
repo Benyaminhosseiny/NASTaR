@@ -88,6 +88,22 @@ def geo_info_from_metadata(metadata_path):
     SemiMinorAxis_name = elem.text if elem is not None else None
     geo_info['SemiMinorAxis'] = SemiMinorAxis_name
 
+    # Find the "OrbitData" element in the XML metadata
+    im_orbt_info_elem = root.find(".//OrbitData")
+    elem = im_orbt_info_elem.find(".//Pass_Direction")
+    Pass_Direction = elem.text if elem is not None else None
+    geo_info['Pass_Direction'] = Pass_Direction
+    
+    elem = im_orbt_info_elem.find(".//PlatformRoll")
+    PlatformRoll = elem.text if elem is not None else None
+    geo_info['PlatformRoll'] = PlatformRoll
+
+    # Find the "Source_Attributes" element in the XML metadata
+    im_orbt_info_elem = root.find(".//Source_Attributes")
+    elem = im_orbt_info_elem.find(".//AntennaPointing")
+    AntennaPointing = elem.text if elem is not None else None
+    geo_info['AntennaPointing'] = AntennaPointing
+
     # Extract tie point information from the "geographicInformation" element
 
     lat_all = []
@@ -450,11 +466,9 @@ def ExtractPatchAndAIS(tii_path, AIS_path, h=64, w=64):
 
     scene_name = parts[-1]
     print(f"Sample image (tii) name: {scene_name}")
-    # print(f"Sample image (tii) path:\n{tii_path}")
+
     # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     # Find the data acquisition date from the metadata XML file:
-
-
     try:
         acqdate0 = f"20{'_'.join(scene_name.split('_')[-4:-2])}" # or f"20{tif_files[tii][-31:-18]}" # YYYYMMDD_HHMMSS
         dt       = datetime.strptime(acqdate0, '%Y%m%d_%H%M%S')
