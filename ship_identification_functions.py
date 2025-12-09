@@ -81,6 +81,42 @@ def tr_te_sample( gt_1d, tr_samples, val_samples, random_seed=1 ):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def Rician_AnomalyDetection(image, AD_threshold=99):
+    import numpy as np
+    from scipy.stats import rice
+
+    # 1. Preprocess image
+    pixels = (image.flatten()).astype(np.float32)
+    pixels /= np.max(pixels)  # Normalize to [0, 1]
+
+    # 2. Estimate Rice distribution parameters using MLE
+    # Rice distribution in scipy: rice(b, loc=0, scale=1)
+    # b = nu / sigma, scale = sigma
+    params = rice.fit(pixels, floc=0)  # Fix location to 0 for pixel intensities
+    b_hat, loc_hat, sigma_hat = params
+    nu_hat = b_hat * sigma_hat
+
+    # 3. Compute likelihood for each pixel
+    likelihoods = rice.pdf(pixels, b_hat, loc=loc_hat, scale=sigma_hat)
+
+    # 4. Compute anomaly scores
+    anomaly_scores = -np.log(likelihoods + 1e-12)  # Add epsilon to avoid log(0)
+
+    # 5. Reshape to image shape
+    anomaly_scores = anomaly_scores.reshape(image.shape)
+
+    # 6. Threshold anomaly scores (e.g., top 1% most anomalous)
+    threshold = np.percentile(anomaly_scores, AD_threshold)
+    anomaly_mask = anomaly_scores > threshold
+    anomaly_scores -= anomaly_scores.min()  # Normalize scores to start from 0
+    anomaly_scores /= anomaly_scores.max()  # Normalize to [0, 1]
+    return anomaly_scores, anomaly_mask, b_hat, loc_hat, sigma_hat
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 class ShipDataset(Dataset):
     def __init__(self, image_paths, labels):
         self.image_paths = image_paths
@@ -117,8 +153,9 @@ class ShipDataset(Dataset):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 class ShipDatasetMemory(Dataset):
-    def __init__(self, images, labels, transform=None):
+    def __init__(self, images, features:None, labels: np.ndarray, transform=None):
         self.images = images
+        self.features = features
         self.labels = labels
         self.num_classes = max(labels)
         self.transform = transform
@@ -128,19 +165,33 @@ class ShipDatasetMemory(Dataset):
 
     def __getitem__(self, idx):
         img = self.images[idx]
+        tensor_img  = torch.tensor(img, dtype=torch.float32)
         label_idx = self.labels[idx]-1
 
-
-        tensor_img = torch.tensor(img, dtype=torch.float32)
+        if self.features is not None:
+            feat = self.features[idx]
+            tensor_feat = torch.tensor(feat, dtype=torch.float32)
+        else:
+            tensor_feat = torch.nan
 
         # Apply data augmentation if transform is provided
         if self.transform:
-            tensor_img = self.transform(tensor_img)  
-
+            
+            if self.features is not None:
+                ch_img  = 1 if tensor_img.ndim  == 2 else tensor_img.shape[0]
+                ch_feat = 1 if tensor_feat.ndim == 2 else tensor_feat.shape[0]
+                tensor_stack = torch.cat((tensor_img, tensor_feat), dim=0)  # Concatenate along the channel dimension
+            
+                tensor_stack = self.transform(tensor_stack)  # Apply transformation
+                tensor_img  = tensor_stack[:ch_img, :, :]  # Extract the first channels as the image
+                tensor_feat = tensor_stack[ch_img:, :, :]  # Extract the last channels as the feature
+            else:
+                tensor_img = self.transform(tensor_img)  # Apply transformation
+        
         # label_onehot = torch.zeros(self.num_classes, dtype=torch.float32)
         # label_onehot[label_idx ] = 1.0
         # return tensor_img, label_onehot
-        return tensor_img, label_idx
+        return tensor_img, tensor_feat,  label_idx
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -149,13 +200,15 @@ class ShipDatasetMemory(Dataset):
 
 # Load images on memory
 
-def load_images_to_memory(image_paths):
+def load_images_to_memory(image_paths, dB_scale=False):
     images = []
     for img_pathii in tqdm(image_paths, desc="Loading images"):
         with rio.open(img_pathii) as src:
             imgii = src.read()  # shape: (channels, H, W)
             imgii = imgii.astype(np.float32)  # Ensure float32 type
 
+            if dB_scale:
+                imgii = np.log10(imgii + 1e-6)  # dB scale
             # Normalize the image [0-1]:
             imgii /= imgii.max()
             imgii -= imgii.mean()
@@ -206,31 +259,36 @@ class EncodedDatasetMemory(Dataset):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def Augmentation_Samples(images, labels, transformations, batch_size, rep=1):
+def Augmentation_Samples(images, features, labels, transformations, batch_size, rep=1):
     """ 
     images: numpy array (N, C, H, W)
     labels: numpy array (N,) 
     tranformations: done by pytorch transform class
     batch_size: batch size for DataLoader
-    rep: number of repeating the process --> size of final samples would be rep*N
+    rep: number of repeating the process --> size of final samples is rep*N
     """
+    _, label_counts = np.unique(labels, return_counts=True)
     
     # Apply data augmentation to training dataset
-    dataset_augmented = ShipDatasetMemory( images, labels=labels, transform=transformations )
+    dataset_augmented = ShipDatasetMemory( images=images, features=features, labels=labels, transform=transformations )
+    
     # Create a new DataLoader for augmented training data
-    dataloader_aug = DataLoader(dataset_augmented, batch_size=batch_size, shuffle=True)
+    dataloader_aug = DataLoader(dataset_augmented, batch_size=batch_size, shuffle=True)#, generator=g)
     
     # Generating samples:
     X_aug_all = []
+    AD_score_aug_all = []
     y_aug_all = []
     for _ in range(rep):
-        for X_aug, y_aug in dataloader_aug:
+        for X_aug, AD_score_aug, y_aug in dataloader_aug:
             X_aug_all.append( X_aug.numpy() )
+            AD_score_aug_all.append( AD_score_aug.numpy() )
             y_aug_all.append( y_aug.numpy()+1 )
     X_aug_all = np.concatenate(X_aug_all)
+    AD_score_aug_all = np.concatenate(AD_score_aug_all)
     y_aug_all = np.concatenate(y_aug_all)
 
-    return X_aug_all, y_aug_all
+    return X_aug_all, AD_score_aug_all, y_aug_all
 
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -302,7 +360,7 @@ class SoftMacroF1Loss(nn.Module):
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimizer, scheduler_class, class_weights_tensor, num_epochs, num_reps, weight_export_name):
+def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimizer, scheduler_class, class_weights_tensor, num_epochs, num_reps, weight_export_name, physics_guided=False):
     # Training loop for model using tr_dataloader and val_dataloader
     device = class_weights_tensor.device
     # Loss Functions:
@@ -319,19 +377,28 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
     weight_decay0  = optimizer.param_groups[0].get('weight_decay', 0)
     for repii in range(num_reps):  # Repeat training for robustness
         print("=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=")
-        
-        optimizerii = type(optimizer)(model.parameters(), lr=learning_rate0, weight_decay=weight_decay0)
+        learning_rateii=learning_rate0/( repii+1 ) # Step decay of learning rate for each repetition
+        # learning_rateii=learning_rate0*np.exp( -.5*repii ) # Exponential decay of learning rate for each repetition
+        optimizerii = type(optimizer)(model.parameters(), lr=learning_rateii, weight_decay=weight_decay0)
         schedulerii = scheduler_class(optimizer)
 
         
         for epoch in range(num_epochs):
             model.train()
             train_loss = 0.0
-            for X_batch, y_batch in tr_dataloader:
+            for X_batch, AD_score_batch, y_batch in tr_dataloader:
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 if X_batch.shape[0] != 1:
                     optimizerii.zero_grad()
-                    pred_logits = model(X_batch)["classifier"]
+
+                    if physics_guided:
+                        AD_score_batch = AD_score_batch.to(device)
+                        pred_logits = model(X_batch, AD_score_batch)["classifier"]
+                    else:
+                        pred_logits = model(X_batch)["classifier"]
+                    
+                    if not isinstance(pred_logits, list): # If single output, convert to list (for ensemble consistency)
+                        pred_logits = [pred_logits]
                     pred_logits = torch.stack(pred_logits, dim=0).mean(dim=0)/SM_temp  # Average ensemble outputs
                     
                     
@@ -342,7 +409,7 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
                     # ce_loss = F.cross_entropy(pred_logits, y_batch)
                     f1_loss = F1Loss(pred_logits, y_batch)
                     
-                    loss = ce_loss+0.001*f1_loss
+                    loss = ce_loss+0.005*f1_loss
                     
                     loss.backward()
                     optimizerii.step()
@@ -353,9 +420,16 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
             model.eval()
             val_loss = 0.0
             with torch.no_grad():
-                for X_val, y_val in val_dataloader:
+                for X_val, AD_score_val, y_val in val_dataloader:
                     X_val, y_val = X_val.to(device), y_val.to(device)
-                    pred_logits = model(X_val)["classifier"]
+
+                    if physics_guided:
+                        AD_score_val = AD_score_val.to(device)
+                        pred_logits = model(X_val, AD_score_val)["classifier"]
+                    else:
+                        pred_logits = model(X_val)["classifier"]
+                    if not isinstance(pred_logits, list): # If single output, convert to list (for ensemble consistency)
+                        pred_logits = [pred_logits]
                     pred_logits = torch.stack(pred_logits, dim=0).mean(dim=0)/SM_temp  # Average ensemble outputs
                     
                     ce_loss = BCELogitsLoss(pred_logits, F.one_hot(y_val.long(), num_classes=N_classes).float())
@@ -365,7 +439,7 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
                     # ce_loss = F.cross_entropy(pred_logits, y_val)
                     f1_loss = F1Loss(pred_logits, y_val)
                     
-                    loss = ce_loss+0.001*f1_loss
+                    loss = ce_loss+0.005*f1_loss
                     
                     val_loss += loss.item() * X_val.size(0)
             
@@ -374,7 +448,7 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
             schedulerii.step(val_loss)
             # exp_scheduler.step()
             
-            loss_condition = (9*val_loss + 1*train_loss)/10  # Combined loss condition
+            loss_condition = (90*val_loss + 10*train_loss)/100  # Combined loss condition
             # loss_condition = 1*val_loss + 0*train_loss  # Combined loss condition
             
             if loss_condition <= loss_condition_min:
@@ -397,25 +471,6 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
             
         model.load_state_dict( torch.load(weight_export_name, map_location=device) )
 
-        # model.eval()
-        # train_loss = 0.0
-        # val_loss = 0.0
-        # with torch.no_grad():
-        #     for X_batch, y_batch in tr_dataloader:
-        #         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-        #         outputs = model(X_batch)["classifier"]
-        #         loss = criterion(outputs, y_batch)
-        #         train_loss += loss.item() * X_batch.size(0)
-        #     train_loss /= len(tr_dataloader.dataset)
-                
-        #     for X_val, y_val in val_dataloader:
-        #         X_val, y_val = X_val.to(device), y_val.to(device)
-        #         outputs = model(X_val)["classifier"]
-        #         loss = criterion(outputs, y_val)
-        #         val_loss += loss.item() * X_val.size(0)
-        #     val_loss /= len(val_dataloader.dataset)
-        #     print(f"\nLOADING THE BEST WEIGHTS in Repeat {repii+1}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}\n\n")
-
     return model, loss_history
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -423,7 +478,7 @@ def train_model(model, tr_dataloader, val_dataloader, N_classes, SM_temp, optimi
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def model_inference(model, dataloader, label_names, device, show=False):
+def model_inference(model, dataloader, label_names, device, physics_guided=False, show=False):
     from sklearn.metrics import confusion_matrix, accuracy_score
     import torch
 
@@ -433,9 +488,15 @@ def model_inference(model, dataloader, label_names, device, show=False):
     y_pred = []
 
     with torch.no_grad():
-        for X_batch, y_batch in dataloader:
+        for X_batch, X_feat, y_batch in dataloader:
             X_batch = X_batch.to(device)
-            outputs = model(X_batch)["classifier"]
+            if physics_guided:
+                X_feat = X_feat.to(device)
+                outputs = model(X_batch, X_feat)["classifier"]
+            else:
+                outputs = model(X_batch)["classifier"]
+            if not isinstance(outputs, list): # If single output, convert to list (for ensemble consistency)
+                        outputs = [outputs]
             outputs = torch.stack(outputs, dim=0).mean(dim=0)  # Average ensemble outputs
 
             preds  = torch.argmax(outputs, dim=1).cpu().numpy()
