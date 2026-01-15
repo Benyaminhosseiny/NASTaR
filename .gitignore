@@ -4,3 +4,6 @@
 
 # Ignore the directory:
 /Prithvi-EO-2.0-300M
+/BenchMarkResults
+/DatasetStat_Charts
+/Wake Classification
