@@ -9,15 +9,15 @@ The NovaSAR Automated Ship Target Recognition (NASTaR) comprises 3415 ship patch
 The following bar chart, pie chart, and figure illustrate the distribution of ship types for the extracted patches, including those that feature wakes, as well as some examples of these patches.
 
 <p align="center">
- <img src="images/ShipType_Distribution_Grouped_BarChart_Top10.jpg" width=50%>
+ <img src="Images/ShipType_Distribution_Grouped_BarChart_Top10.jpg" width=50%>
 </p>
 
 <p align="center">
- <img src="images/ShipType_Distribution_Wakes_PieChart.jpg" width=50%>
+ <img src="Images/ShipType_Distribution_Wakes_PieChart.jpg" width=50%>
 </p>
 
 <p align="center">
- <img src="images/Samples_Github.jpg" width=50%>
+ <img src="Images/Samples_Github.jpg" width=50%>
 </p>
 
 
