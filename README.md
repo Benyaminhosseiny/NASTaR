@@ -78,10 +78,11 @@ The following bar chart, pie chart, and figure illustrate the distribution of sh
 
 
 ## Citation
-
+```
 @article{hosseiny2025nastar,
   title={NASTaR: NovaSAR Automated Ship Target Recognition Dataset},
   author={Hosseiny, Benyamin and Kamirul, Kamirul and Pappas, Odysseas and Achim, Alin},
   journal={arXiv preprint arXiv:2512.18503},
   year={2025}
 }
+```
