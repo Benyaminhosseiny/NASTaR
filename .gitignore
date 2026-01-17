@@ -1,6 +1,7 @@
 # Ignore all .pth and .pt files
 *.pth
 *.pt
+ViT.py
 
 # Ignore the directory:
 /Prithvi-EO-2.0-300M
