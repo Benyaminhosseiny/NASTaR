@@ -76,41 +76,6 @@ def tr_te_sample( gt_1d, tr_samples, val_samples, random_seed=1 ):
 
   return tr_label, val_label, te_label, tr_idx, val_idx, te_idx
 
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-def Rician_AnomalyDetection(image, AD_threshold=99):
-    import numpy as np
-    from scipy.stats import rice
-
-    # 1. Preprocess image
-    pixels = (image.flatten()).astype(np.float32)
-    pixels /= np.max(pixels)  # Normalize to [0, 1]
-
-    # 2. Estimate Rice distribution parameters using MLE
-    # Rice distribution in scipy: rice(b, loc=0, scale=1)
-    # b = nu / sigma, scale = sigma
-    params = rice.fit(pixels, floc=0)  # Fix location to 0 for pixel intensities
-    b_hat, loc_hat, sigma_hat = params
-    nu_hat = b_hat * sigma_hat
-
-    # 3. Compute likelihood for each pixel
-    likelihoods = rice.pdf(pixels, b_hat, loc=loc_hat, scale=sigma_hat)
-
-    # 4. Compute anomaly scores
-    anomaly_scores = -np.log(likelihoods + 1e-12)  # Add epsilon to avoid log(0)
-
-    # 5. Reshape to image shape
-    anomaly_scores = anomaly_scores.reshape(image.shape)
-
-    # 6. Threshold anomaly scores (e.g., top 1% most anomalous)
-    threshold = np.percentile(anomaly_scores, AD_threshold)
-    anomaly_mask = anomaly_scores > threshold
-    anomaly_scores -= anomaly_scores.min()  # Normalize scores to start from 0
-    anomaly_scores /= anomaly_scores.max()  # Normalize to [0, 1]
-    return anomaly_scores, anomaly_mask, b_hat, loc_hat, sigma_hat
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -523,13 +488,6 @@ def model_inference(model, dataloader, label_names, device, physics_guided=False
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-
-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
 def confusion_mat(label, predicted, axlabels, plot=True, savefig_path="", cmap="gray_r"):
     #OA
     from sklearn.metrics import classification_report, confusion_matrix, cohen_kappa_score, recall_score, precision_score, f1_score
@@ -621,3 +579,165 @@ def confusion_mat(label, predicted, axlabels, plot=True, savefig_path="", cmap="
       if savefig_path !="":
         plt.savefig(savefig_path)
     return conf_mat
+
+
+
+def plot_metrics_bar_chart(confusion_matrices, class_labels):
+    """
+    Plots a horizontal grouped bar chart of average ± std of precision, recall, and F1 score per class.
+
+    Parameters:
+    - confusion_matrices: list of numpy arrays representing confusion matrices
+    - class_labels: list of strings representing class names
+    """
+    num_classes = len(class_labels)
+
+    # Compute metrics
+    precision_list, recall_list, f1_list = [], [], []
+
+    for cm in confusion_matrices:
+        tp = np.diag(cm)
+        fp = np.sum(cm, axis=0) - tp
+        fn = np.sum(cm, axis=1) - tp
+
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+        f1 = 2 * precision * recall / (precision + recall)
+
+        if np.min(tp)>0:
+            precision_list.append(precision)
+            recall_list.append(recall)
+            f1_list.append(f1)
+
+    # Convert to arrays
+    precision_array = np.array(precision_list); #print(f"precision_array: {precision_array}")
+    recall_array = np.array(recall_list); #print(f"recall_array: {recall_array}")
+    f1_array = np.array(f1_list);  #print(f"f1_array: {f1_array}")
+
+    # Compute averages and stds
+    avg_precision = np.mean(precision_array, axis=0)
+    std_precision = np.std(precision_array, axis=0)
+
+    avg_recall = np.mean(recall_array, axis=0)
+    std_recall = np.std(recall_array, axis=0)
+
+    avg_f1 = np.mean(f1_array, axis=0)
+    std_f1 = np.std(f1_array, axis=0)
+
+    # Plot horizontal grouped bar chart
+    metrics = ['Precision', 'Recall', 'F1 Score']
+    avg_metrics = [avg_precision, avg_recall, avg_f1]
+    std_metrics = [std_precision, std_recall, std_f1]
+
+    x = np.arange(len(metrics))
+    bar_width = 0.25
+    fig, ax = plt.subplots(figsize=(10, 6))
+    # print(f"avg_metrics: {avg_metrics}")
+    for i in range(num_classes):
+        values = [avg[i] for avg in avg_metrics]
+        errors = [std[i] for std in std_metrics]
+        positions = x + (i - 1) * bar_width
+        bars = ax.barh(positions, values, height=bar_width, xerr=errors, label=class_labels[i], capsize=5)
+        for bar, avg_val, std_val in zip(bars, values, errors):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_y() + bar.get_height() / 2,
+                    f"{100*avg_val:.2f} ± {100*std_val:.2f}", va='center', ha='center', color='white', fontsize=9)
+
+    ax.set_yticks(x)
+    ax.set_yticklabels(metrics)
+    ax.set_xlabel("Score")
+    ax.set_title("Average ± Std of Metrics per Class (Horizontal Grouped Bar Chart)")
+    ax.legend()
+    plt.tight_layout()
+
+
+def compute_metrics_from_confusion_matrix(cm_list):
+    """
+    Computes Overall Accuracy (OA), Average Accuracy (AA), Mean Precision, and Mean F1-score from a confusion matrix.
+
+    Parameters:
+    - cm: numpy array representing the confusion matrix
+
+    Returns:
+    - OA: Overall Accuracy
+    - AA: Average Accuracy
+    - mean_Precision: Mean Precision
+    - mean_F1: Mean F1-score
+    """
+    
+    from sklearn.metrics import precision_score, f1_score
+
+    OA = []
+    AA = []
+    APr = []
+    AF1 = []
+    for cmii in cm_list:
+        # Overall Accuracy (OA)
+        OAii = np.trace(cmii) / np.sum(cmii)
+
+        # Per-class Accuracy
+        per_class_acc = np.diag(cmii) / np.sum(cmii, axis=1)
+        AAii = np.mean(per_class_acc)
+
+        # Generate true and predicted labels from confusion matrix
+        true_labels = []
+        pred_labels = []
+
+        for i in range(N_classes):
+            for j in range(N_classes):
+                true_labels += [i] * cmii[i][j]
+                pred_labels += [j] * cmii[i][j]
+
+        # Mean Precision and Mean F1-score
+        mean_Prii = precision_score(true_labels, pred_labels, average='macro')
+        mean_F1ii = f1_score(true_labels, pred_labels, average='macro')
+
+        OA.append(OAii)
+        AA.append(AAii)
+        APr.append(mean_Prii)
+        AF1.append(mean_F1ii)
+    return OA, AA, APr, AF1
+
+
+def plot_metrics_summary(OA, AA, APr, AF1, cm_list):
+    """
+    Plots a summary bar chart of Overall Accuracy (OA), Average Accuracy (AA), Mean Precision, and Mean F1-score.
+
+    Parameters:
+    - OA: list of Overall Accuracy values
+    - AA: list of Average Accuracy values
+    - APr: list of Mean Precision values
+    - AF1: list of Mean F1-score values
+    """
+    data = [OA, AA, APr, AF1]
+    titles = ["OA", "AA", "APr", "AF1"] 
+
+    # Find non-zero metrics (due to the bias!)
+    nonzero_idx = []
+    for ii, cmii in enumerate(cm_list):
+        tp = np.diag(cmii)
+        if np.min(tp)!=0:
+            nonzero_idx.append(ii)
+
+
+    # --- Plot ---
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), constrained_layout=True)
+    axes = axes.ravel()  # flatten 2x2 to a simple list of axes
+
+    for ax, series, title in zip(axes, data, titles):
+        x = range(1, len(series) + 1)
+        ax.bar(x, series, color="#5445A7")
+
+        # Mean line (ignores NaNs)
+        arr = np.asarray(series, dtype=float)
+        if arr.size:  # skip if empty
+            mean_val = np.nanmean(arr[nonzero_idx])
+            std_val = np.nanstd(arr[nonzero_idx])
+            ax.axhline(mean_val, color="crimson", linestyle="--", linewidth=1.8,
+                    label=f"Mean = {100*mean_val:.1f} ± {100*std_val:.1f}")
+            ax.legend(loc="upper left", frameon=False)
+
+        # ax.set_title(title)
+        # ax.set_xlabel("Category")
+        ax.set_ylabel(title)
+        ax.set_xticks(x)
+        ax.grid(axis="y", alpha=0.3)
