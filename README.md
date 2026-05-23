@@ -8,6 +8,10 @@ The NovaSAR Automated Ship Target Recognition (NASTaR) comprises 3415 ship patch
 
 Download the dataset from the following [link](https://data.bris.ac.uk/data/dataset/2tfa6x37oerz2lyiw6hp47058).
 
+The latest open-access version of the paper is available on arXiv [here](https://arxiv.org/abs/2512.18503).
+
+You can use the notebook [NovaSAR_ShipIdentificator.ipynb](https://github.com/Benyaminhosseiny/NASTaR/blob/main/NovaSAR_ShipIdentificator.ipynb) to explore the dataset and run the provided code.
+
 The following bar chart, pie chart, and figure illustrate the distribution of ship types for the extracted patches, including those that feature wakes, as well as some examples of these patches.
 
 <p align="center">
@@ -79,10 +83,13 @@ The following bar chart, pie chart, and figure illustrate the distribution of sh
 
 ## Citation
 ```
-@article{hosseiny2025nastar,
-  title={NASTaR: NovaSAR Automated Ship Target Recognition Dataset},
+@article{hosseiny2026nastar,
+  title={NASTaR: A NovaSAR-Based Automated Ship Target Recognition Dataset},
   author={Hosseiny, Benyamin and Kamirul, Kamirul and Pappas, Odysseas and Achim, Alin},
-  journal={arXiv preprint arXiv:2512.18503},
-  year={2025}
+  journal={IEEE Geoscience and Remote Sensing Letters},
+  volume={23},
+  pages={1--5},
+  year={2026},
+  publisher={IEEE}
 }
 ```
