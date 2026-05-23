@@ -8,6 +8,8 @@ The NovaSAR Automated Ship Target Recognition (NASTaR) comprises 3415 ship patch
 
 Download the dataset from the following [link](https://data.bris.ac.uk/data/dataset/2tfa6x37oerz2lyiw6hp47058).
 
+Read the full paper on IEEE Xplore from the following [link](https://ieeexplore.ieee.org/abstract/document/11471689).
+
 The latest open-access version of the paper is available on arXiv [here](https://arxiv.org/abs/2512.18503).
 
 You can use the notebook [NovaSAR_ShipIdentificator.ipynb](https://github.com/Benyaminhosseiny/NASTaR/blob/main/NovaSAR_ShipIdentificator.ipynb) to explore the dataset and run the provided code.
